@@ -1,0 +1,40 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "com.monkeycode.fileencryptor"
+    compileSdk = 34
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    defaultConfig {
+        applicationId = "com.monkeycode.fileencryptor"
+        minSdk = 21
+        targetSdk = 34
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    buildTypes {
+        release {
+            // CI 默认用 debug 签名以便直接安装；正式发布请配置 key.properties。
+            signingConfig = signingConfigs.debug
+            minifyEnabled = false
+            shrinkResources = false
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
