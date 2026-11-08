@@ -1,7 +1,7 @@
 name: file_encryptor
 description: 本地文件加密工具，兼容网页版 FENC 格式（AES-256-GCM / AES-256-CTR）
 publish_to: "none"
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -10,10 +10,10 @@ dependencies:
   flutter:
     sdk: flutter
   file_picker: ^8.1.6
-  share_plus: ^10.1.4
   path_provider: ^2.1.5
   pointycastle: ^3.9.1
   gal: ^2.3.3
+  shared_preferences: ^2.5.6
 
 dev_dependencies:
   flutter_test:
