@@ -181,7 +181,7 @@ class CryptoEngine {
 
   static Uint8List _ctrProcess(
       Uint8List key, Uint8List blockIv, Uint8List data, bool encrypt) {
-    final cipher = SICBlockCipher(AESEngine())
+    final cipher = SICStreamCipher(AESEngine())
       ..init(encrypt, ParametersWithIV(KeyParameter(key), blockIv));
     return cipher.process(data);
   }
@@ -356,7 +356,7 @@ class CryptoEngine {
       outRaf.writeFromSync(header);
 
       final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(hmacKey));
-      hmac.update(iv);
+      hmac.update(iv, 0, iv.length);
 
       final totalChunks = total == 0 ? 1 : (total / kChunkSize).ceil();
       for (var i = 0; i < totalChunks; i++) {
@@ -369,11 +369,12 @@ class CryptoEngine {
         final cipher =
             _ctrProcess(fileKey, _ctrBlockIv(iv, i), plain, true);
         outRaf.writeFromSync(cipher);
-        hmac.update(cipher);
+        hmac.update(cipher, 0, cipher.length);
         progress((i + 1) / (totalChunks + 1));
       }
 
-      final tag = hmac.doFinal();
+      final tag = Uint8List(hmac.macSize);
+      hmac.doFinal(tag, 0);
       outRaf.writeFromSync(tag);
       progress(1.0);
     } finally {
@@ -422,18 +423,19 @@ class CryptoEngine {
 
       // 第一遍：校验 HMAC
       final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(hmacKey));
-      hmac.update(iv);
+      hmac.update(iv, 0, iv.length);
       inRaf.setPositionSync(dataStart);
       var remaining = dataLen;
       while (remaining > 0) {
         final n = remaining < kChunkSize ? remaining : kChunkSize;
         final buf = inRaf.readSync(n);
         if (buf.isEmpty) break;
-        hmac.update(buf);
+        hmac.update(buf, 0, buf.length);
         remaining -= buf.length;
         progress(0.5 * (1 - remaining / (dataLen == 0 ? 1 : dataLen)));
       }
-      final calc = hmac.doFinal();
+      final calc = Uint8List(hmac.macSize);
+      hmac.doFinal(calc, 0);
 
       inRaf.setPositionSync(dataStart + dataLen);
       final tag = inRaf.readSync(kHmacLen);
