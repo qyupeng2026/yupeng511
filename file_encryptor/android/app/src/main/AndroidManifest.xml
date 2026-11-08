@@ -1,9 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 保存到相册：Android 9 及以下需要写外部存储权限 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
     <application
         android:label="文件加密"
         android:name="${applicationName}"
         android:icon="@drawable/ic_launcher"
         android:allowBackup="false"
+        android:requestLegacyExternalStorage="true"
         android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -74,6 +75,14 @@ class _EncryptorPageState extends State<EncryptorPage> {
   String? _resultPath;
   String _resultName = '';
   int _resultSize = 0;
+  bool _resultSavedToGallery = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 启动时清理上次遗留的临时产物
+    _purgeCache();
+  }
 
   @override
   void dispose() {
@@ -105,6 +114,7 @@ class _EncryptorPageState extends State<EncryptorPage> {
     _resultPath = null;
     _resultName = '';
     _resultSize = 0;
+    _resultSavedToGallery = false;
   }
 
   Future<void> _pickFile() async {
@@ -152,8 +162,16 @@ class _EncryptorPageState extends State<EncryptorPage> {
     return '$name.dec';
   }
 
+  /// 所有产物都落在临时缓存目录，便于完成后统一清理。
+  Future<Directory> _cacheDir() async {
+    final base = await getTemporaryDirectory();
+    final dir = Directory('${base.path}/fenc_cache');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
+
   Future<String> _outputPath(String name) async {
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await _cacheDir();
     final safe = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
     var candidate = '${dir.path}/$safe';
     var i = 1;
@@ -165,6 +183,57 @@ class _EncryptorPageState extends State<EncryptorPage> {
       i++;
     }
     return candidate;
+  }
+
+  /// 清理缓存目录；[keepPath] 指定需保留的当前产物。
+  Future<void> _purgeCache({String? keepPath}) async {
+    try {
+      final dir = await _cacheDir();
+      await for (final entity in dir.list()) {
+        if (entity is File) {
+          if (keepPath != null && entity.path == keepPath) continue;
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  bool _isImage(String name) =>
+      RegExp(r'\.(jpe?g|png|gif|webp|bmp|heic|heif|dng)$', caseSensitive: false)
+          .hasMatch(name);
+
+  bool _isVideo(String name) =>
+      RegExp(r'\.(mp4|mov|m4v|3gp|mkv|avi|webm)$', caseSensitive: false)
+          .hasMatch(name);
+
+  /// 保存到系统相册（仅图片/视频格式受支持）。
+  Future<bool> _saveToGallery(String path, String name) async {
+    try {
+      final has = await Gal.hasAccess();
+      if (!has) {
+        final granted = await Gal.requestAccess();
+        if (!granted) {
+          _showStatus('未获得相册权限，无法保存到相册', 'error');
+          return false;
+        }
+      }
+      if (_isImage(name)) {
+        await Gal.putImage(path, album: '文件加密');
+      } else if (_isVideo(name)) {
+        await Gal.putVideo(path, album: '文件加密');
+      } else {
+        return false;
+      }
+      return true;
+    } on GalException catch (e) {
+      _showStatus('保存相册失败：${e.type.message}', 'error');
+      return false;
+    } catch (e) {
+      _showStatus('保存相册失败：$e', 'error');
+      return false;
+    }
   }
 
   Future<void> _run(String type) async {
@@ -208,6 +277,9 @@ class _EncryptorPageState extends State<EncryptorPage> {
       outName = _decryptedName(_fileName);
     }
 
+    // 每次开始新任务先清空旧缓存，避免临时文件堆积
+    await _purgeCache();
+
     setState(() {
       _busy = true;
       _status = null;
@@ -233,17 +305,44 @@ class _EncryptorPageState extends State<EncryptorPage> {
         },
       );
       final size = await File(out).length();
-      if (!mounted) return;
-      setState(() {
-        _resultPath = out;
-        _resultName = outName;
-        _resultSize = size;
-      });
       watch.stop();
+      if (!mounted) return;
+
+      // 图片/视频自动存入手机相册，成功后立即清掉临时产物
+      var savedToGallery = false;
+      if (_isImage(outName) || _isVideo(outName)) {
+        savedToGallery = await _saveToGallery(out, outName);
+        if (savedToGallery) {
+          await _purgeCache();
+          if (!mounted) return;
+          setState(() {
+            _resultPath = null;
+            _resultName = outName;
+            _resultSize = size;
+            _resultSavedToGallery = true;
+          });
+        }
+      }
+
+      if (!savedToGallery) {
+        // 保留当前产物供分享，其余历史临时文件全部清理
+        await _purgeCache(keepPath: out);
+        if (!mounted) return;
+        setState(() {
+          _resultPath = out;
+          _resultName = outName;
+          _resultSize = size;
+          _resultSavedToGallery = false;
+        });
+      }
+
+      final secs = (watch.elapsedMilliseconds / 1000).toStringAsFixed(1);
       _showStatus(
         type == 'encrypt'
-            ? '加密完成，用时 ${(watch.elapsedMilliseconds / 1000).toStringAsFixed(1)} 秒，请妥善保管密码'
-            : '解密完成，用时 ${(watch.elapsedMilliseconds / 1000).toStringAsFixed(1)} 秒',
+            ? '加密完成，用时 $secs 秒，请妥善保管密码'
+            : (savedToGallery
+                ? '解密完成，用时 $secs 秒，已保存到相册并清理缓存'
+                : '解密完成，用时 $secs 秒'),
         'success',
       );
     } catch (e) {
@@ -262,6 +361,24 @@ class _EncryptorPageState extends State<EncryptorPage> {
       );
     } catch (e) {
       _showStatus('分享失败：$e', 'error');
+    }
+  }
+
+  Future<void> _saveResultToGallery() async {
+    if (_resultPath == null) return;
+    if (!_isImage(_resultName) && !_isVideo(_resultName)) {
+      _showStatus('仅支持图片或视频格式存入相册，其他文件请用「分享 / 保存」', 'error');
+      return;
+    }
+    final ok = await _saveToGallery(_resultPath!, _resultName);
+    if (ok && mounted) {
+      await _purgeCache();
+      if (!mounted) return;
+      setState(() {
+        _resultPath = null;
+        _resultSavedToGallery = true;
+      });
+      _showStatus('已保存到相册「文件加密」，临时缓存已清理', 'success');
     }
   }
 
@@ -386,7 +503,7 @@ class _EncryptorPageState extends State<EncryptorPage> {
                             style: TextStyle(fontSize: 13, color: _statusColor, height: 1.5)),
                       ),
                     ],
-                    if (_resultPath != null) ...[
+                    if (_resultPath != null || _resultSavedToGallery) ...[
                       const SizedBox(height: 16),
                       _buildResult(),
                     ],
@@ -673,14 +790,34 @@ class _EncryptorPageState extends State<EncryptorPage> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(child: _btn(label: '📲 保存 / 分享', primary: true, onTap: _share)),
-              const SizedBox(width: 10),
-              Expanded(child: _btn(label: '📋 复制路径', primary: false, onTap: _copyPath)),
-            ],
-          ),
+          if (_resultSavedToGallery) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: kSuccess.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: kSuccess.withValues(alpha: 0.35)),
+              ),
+              child: const Text('已保存到相册「文件加密」，临时缓存已清理',
+                  style: TextStyle(fontSize: 12.5, color: kSuccess)),
+            ),
+          ] else ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(child: _btn(label: '📲 分享 / 保存', primary: true, onTap: _share)),
+                const SizedBox(width: 10),
+                Expanded(child: _btn(label: '📋 复制路径', primary: false, onTap: _copyPath)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            _btn(
+              label: '🖼 存入相册（图片/视频）',
+              primary: false,
+              onTap: _saveResultToGallery,
+            ),
+          ],
         ],
       ),
     );

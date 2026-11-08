@@ -135,7 +135,15 @@ class CryptoEngine {
       final output = msg['output'] as String;
       final password = msg['password'] as String;
 
-      void progress(double v) => send.send({'p': v});
+      var lastSent = 0;
+      void progress(double v) {
+        // 节流：超大文件分块数以万计，控制回传频率避免消息队列膨胀
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (v >= 1.0 || now - lastSent >= 200) {
+          lastSent = now;
+          send.send({'p': v});
+        }
+      }
 
       switch (op) {
         case CryptoOp.encryptGcm:
